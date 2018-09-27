@@ -4,11 +4,13 @@ namespace Ups;
 
 use DateTime;
 use Exception;
+use LogicException;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use SimpleXMLElement;
 use SoapClient;
+use SoapHeader;
 use Ups\Exception\InvalidResponseException;
 
 class SoapRequest implements RequestInterface, LoggerAwareInterface
@@ -97,7 +99,8 @@ class SoapRequest implements RequestInterface, LoggerAwareInterface
         );
 
         // Initialize soap client
-        $client = new SoapClient(__DIR__.'/WSDL/'.$wsdl.'.wsdl', $mode);
+        $wsdlFile = sprintf('%s/WSDL/%s.wsdl', __DIR__, $wsdl);
+        $client = new SoapClient($wsdlFile, $mode);
 
         // Set endpoint URL + auth & request data
         $client->__setLocation($endpointurl);
@@ -105,7 +108,7 @@ class SoapRequest implements RequestInterface, LoggerAwareInterface
         $request = (array)new SimpleXMLElement($request);
 
         // Build auth header
-        $header = new \SoapHeader('http://www.ups.com/schema/xpci/1.0/auth', 'AccessRequest', $auth);
+        $header = $this->getAuthHeader($wsdlFile, $auth);
         $client->__setSoapHeaders($header);
 
         // Log request
@@ -226,5 +229,32 @@ class SoapRequest implements RequestInterface, LoggerAwareInterface
         $this->access = $access;
 
         return $this;
+    }
+
+    /**
+     * Generates the relevant SOAP auth header, based on whether the WSDL file imports AccessRequestXPCI or UPSSecurity.
+     *
+     * @param string $wsdlFile
+     * @param array $auth
+     *
+     * @return SoapHeader
+     */
+    private function getAuthHeader($wsdlFile, $auth)
+    {
+        $file = simplexml_load_file($wsdlFile);
+
+        // Most APIs seem to use AccessRequest:
+        if ($file->xpath('//xsd:import[@schemaLocation = "AccessRequestXPCI.xsd"]')) {
+            return new SoapHeader('http://www.ups.com/schema/xpci/1.0/auth', 'AccessRequest', $auth);
+        }
+
+        // The Pickup API uses UPSSecurity:
+        if ($file->xpath('//xsd:import[@schemaLocation = "UPSSecurity.xsd"]')) {
+            return new SoapHeader('http://www.ups.com/XMLSchema/XOLTWS/UPSS/v1.0', 'UPSSecurity', $auth);
+        }
+
+        // If you're trying to implement an API that uses neither of the above, add the relevant lines here (or come up
+        // with a nicer solution!)
+        throw new LogicException(sprintf("Don't know how to create a SOAP auth header from WSDL file: %s", $wsdlFile));
     }
 }
