@@ -4,6 +4,7 @@ namespace Ups;
 
 use DOMDocument;
 use Ups\Entity\Pickup\PickupCreationRequest;
+use Ups\Exception\InvalidResponseException;
 
 class Pickup extends Ups
 {
@@ -15,7 +16,7 @@ class Pickup extends Ups
     /**
      * {@inheritdoc}
      */
-    protected $productionBaseUrl = 'https://www.ups.com/webservices';
+    protected $productionBaseUrl = 'https://onlinetools.ups.com/webservices';
 
     /**
      * {@inheritdoc}
@@ -27,13 +28,17 @@ class Pickup extends Ups
         $requestHandler = new SoapRequest($this->getLogger());
         $endpointUrl = $this->compileEndpointUrl(self::PICKUP_ENDPOINT);
 
-        $response = $requestHandler->request(
-            $this->createAccess(),
-            (string) $request,
-            $endpointUrl,
-            'ProcessPickupCreation',
-            'Pickup'
-        );
+        try {
+            $response = $requestHandler->request(
+                $this->createAccess(),
+                (string) $request,
+                $endpointUrl,
+                'ProcessPickupCreation',
+                'Pickup'
+            );
+        } catch (InvalidResponseException $e) {
+            return ['error' => $e->getMessage()];
+        }
 
         $apiResponse = $response->getResponse()->Body->PickupCreationResponse;
 

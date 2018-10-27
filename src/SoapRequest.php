@@ -69,6 +69,7 @@ class SoapRequest implements RequestInterface, LoggerAwareInterface
      * @param string $wsdl Which WSDL file to use
      *
      * @throws Exception
+     * @throws InvalidResponseException
      * @todo: make access, request and endpointurl nullable to make the testable
      *
      * @return ResponseInterface
@@ -114,15 +115,10 @@ class SoapRequest implements RequestInterface, LoggerAwareInterface
         // Log request
         $date = new DateTime();
         $id = $date->format('YmdHisu');
-        $this->logger->info('Request To UPS API', [
-            'id' => $id,
-            'endpointurl' => $this->getEndpointUrl(),
-        ]);
+        $endpointurl = $this->getEndpointUrl();
 
-        $this->logger->debug('Request: '.$this->getRequest(), [
-            'id' => $id,
-            'endpointurl' => $this->getEndpointUrl(),
-        ]);
+        $this->logger->info('Request To UPS API', compact('id', 'endpointurl'));
+        $this->logger->debug('Request: '.$this->getRequest(), compact('id', 'endpointurl'));
 
         // Perform call and get response
         try {
@@ -130,15 +126,8 @@ class SoapRequest implements RequestInterface, LoggerAwareInterface
             $client->__soapCall($operation, [$request]);
             $body = $client->__getLastResponse();
 
-            $this->logger->info('Response from UPS API', [
-                'id' => $id,
-                'endpointurl' => $this->getEndpointUrl(),
-            ]);
-
-            $this->logger->debug('Response: '.$body, [
-                'id' => $id,
-                'endpointurl' => $this->getEndpointUrl(),
-            ]);
+            $this->logger->info('Response from UPS API', compact('id', 'endpointurl'));
+            $this->logger->debug('Response: '.$body, compact('id', 'endpointurl'));
 
             // Strip off namespaces and make XML
             $body = preg_replace('/(<\/*)[^>:]+:/', '$1', $body);
@@ -147,27 +136,29 @@ class SoapRequest implements RequestInterface, LoggerAwareInterface
             return $responseInstance->setText($body)->setResponse($xml);
         } catch (\Exception $e) {
             // Parse error response
-            $xml = new SimpleXMLElement($client->__getLastResponse());
+            $lastResponse = $client->__getLastResponse();
+            $simpleXMLElement = new SimpleXMLElement(preg_replace('/(<\/*)[^>:]+:/', '$1', $lastResponse));
+            $errors = $simpleXMLElement->xpath('//Description');
+
+            if ($errors) {
+                throw new InvalidResponseException((string) $errors[0]);
+            }
+
+            $xml = new SimpleXMLElement($lastResponse);
+
             $xml->registerXPathNamespace('err', 'http://www.ups.com/schema/xpci/1.0/error');
             $errorCode = $xml->xpath('//err:PrimaryErrorCode/err:Code');
             $errorMsg = $xml->xpath('//err:PrimaryErrorCode/err:Description');
 
-            if (isset($errorCode[0]) && isset($errorMsg[0])) {
-                $this->logger->alert($errorMsg[0], [
-                    'id' => $id,
-                    'endpointurl' => $this->getEndpointUrl(),
-                ]);
+            if (isset($errorCode[0], $errorMsg[0])) {
+                $this->logger->alert($errorMsg[0], compact('id', 'endpointurl'));
 
                 throw new InvalidResponseException('Failure: '.(string)$errorMsg[0].' ('.(string)$errorCode[0].')');
-            } else {
-                $this->logger->alert($e->getMessage(), [
-                    'id' => $id,
-                    'endpointurl' => $this->getEndpointUrl(),
-                ]);
-
-                throw new InvalidResponseException('Cannot parse error from UPS: '.$e->getMessage(), $e->getCode(),
-                    $e);
             }
+
+            $this->logger->alert($e->getMessage(), compact('id', 'endpointurl'));
+
+            throw new InvalidResponseException('Cannot parse error from UPS: ' . $e->getMessage(), $e->getCode(), $e);
         }
     }
 
